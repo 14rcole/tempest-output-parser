@@ -1,0 +1,20 @@
+
+tempest-log: Parse combined stdout and stderr
+             from openstack tempest test suite.
+             eg, `tempest run |& tee <logfile>`
+
+Usage:
+  tempest-log <file> [flags]
+
+  flags:
+    -n, --filter-name <name>         Include only entries whose name matches <name>
+
+    -r, --filter-result <result>     Include only entries whose result matches <result>
+                                     Values: [ok, skipped, failed]
+
+    -d, --print-details <details>    Whether to print entry details such as
+                                     captured stack traces and REST API requests
+                                     Default: yes
+                                     Values: [yes, no]
+
+    -h, --help                       Print this message

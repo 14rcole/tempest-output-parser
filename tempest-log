@@ -1,0 +1,188 @@
+#!/usr/bin/python
+
+import sys
+from collections import deque
+
+def print_help():
+  msg = """tempest-log: Parse combined stdout and stderr
+             from openstack tempest test suite.
+             eg, `tempest run |& tee <logfile>`
+Usage:
+  tempest-log <file> [flags]
+
+  flags:
+    -n, --filter-name <name>         Include only entries whose name matches <name>
+
+    -r, --filter-result <result>     Include only entries whose result matches <result>
+                                     Values: [ok, skipped, failed]
+
+    -d, --print-details <details>    Whether to print entry details such as
+                                     captured stack traces and REST API requests
+                                     Default: yes
+                                     Values: [yes, no]
+
+    -h, --help                       Print this message
+"""
+  print_error(msg)
+
+class LogEntry:
+  def __init__(self, raw_string, details):
+     self.raw_string = raw_string
+     self.details = details
+     self.entry_tokens = self.raw_string.split(' ')
+
+  def name(self):
+    entry_tokens = self.entry_tokens
+    if entry_tokens[1] == 'setUpClass':
+      name = entry_tokens[2].lstrip('(').rstrip(')')
+    else:
+      name = entry_tokens[1]
+    return name
+
+  def result(self):
+    entry_tokens  = self.entry_tokens
+    result = None
+    # check by order of most common structure
+    # to minimize comparisons
+    if entry_tokens[3] == '...':
+      result = entry_tokens[4]
+    elif entry_tokens[2] == '...':
+      result = entry_tokens[3]
+    elif entry_tokens[4] == '...':
+      result = entry_tokens[5]
+    else:
+      raise Exception("Unhandled case for entries: {}".format(entry_tokens))
+    return result.rstrip(":")
+
+def filter_name(entries, name):
+  return [e for e in entries if name in e.name()]
+
+def filter_result(entries, result):
+  if result in ['ok', 'failed', 'skipped']:
+    return [e for e in entries if result == e.result().lower()]
+  else:
+    raise Exception("Invalid result for filter")
+
+def print_error(msg):
+  sys.stderr.write("{}\n".format(msg))
+
+def cmd_args_error(msg):
+  print_error(msg)
+  print_help()
+  sys.exit(1)
+
+# get the value of -n
+def stream_read_cmd_n(argv_stream):
+   if len(argv_stream) > 0:
+      return argv_stream.pop(0)
+   else:
+     cmd_args_error("Expected argument to --filter-name")
+
+# get the value of -r
+def stream_read_cmd_r(argv_stream):
+  if len(argv_stream) > 0:
+    result_match = argv_stream.pop(0).lower()
+    if result_match in ['ok', 'pass', 'passed', 'success', 'succeeded']:
+      return 'ok'
+    elif result_match in ['fail', 'failed', 'failure', 'error']:
+      return 'failed'
+    elif result_match in ['skip', 'skipped']:
+      return 'skipped'
+    else:
+      cmd_args_error("Invalid argument to --filter-result: {}".format(result_match))
+  else:
+    cmd_args_error("Expected argument to --filter-result")
+
+# get the value of -d
+def stream_read_cmd_d(argv_stream):
+  if len(argv_stream) > 0:
+    print_details = argv_stream.pop(0).lower()
+    if print_details in ['true', 'yes']:
+      return True
+    elif print_details in ['false', 'no']:
+      return False
+    else:
+      cmd_args_error("Expected boolean argument to --print-details")
+  else:
+    cmd_args_error("Expected argument to --print-details")
+
+def parse_cmd_args():
+  # use argv as a stream
+  argv_stream = sys.argv[1:]
+  filename = None
+  name_match = None
+  result_match = None
+  print_details = True
+  if len(argv_stream) < 1:
+    cmd_args_error("Invalid arguments")
+  while len(argv_stream) > 0:
+    arg = argv_stream.pop(0)
+    if arg in [ '--help', '-h']:
+      print_help()
+      sys.exit(0)
+    elif arg in ['--filter-name', '-n']:
+      name_match = stream_read_cmd_n(argv_stream)
+    elif arg in ['--filter-result', '-r']:
+      result_match = stream_read_cmd_r(argv_stream)
+    elif arg in ['--print-details', '-d']:
+      print_details = stream_read_cmd_d(argv_stream)
+    elif arg[0] == '-':
+      cmd_args_error("Error: no such flag {}\n".format(arg))
+    else:
+      filename = arg
+  if filename is None:
+    cmd_args_error("Error: Log file not specified")
+  return filename, name_match, result_match, print_details
+
+def read_details(linestream):
+  details = []
+  while len(linestream) > 0:
+    line = linestream.popleft().rstrip('\n')
+    if len(line) == 0:
+      continue
+    if line[0] == '{' or line[0] == '=':
+      # found the next entry or summary
+      # put it back in the stream
+      linestream.appendleft(line)
+      return details
+    else:
+      details.append(line)
+  return details
+
+def main():
+  logfile, name_match, result_match, print_details = parse_cmd_args()
+  with open(logfile, 'r') as f:
+    # emulate a stream for dispatched reads
+    log_entries = deque([])
+    linestream = deque(f.readlines())
+    while len(linestream) > 0:
+      line = linestream.popleft().rstrip('\n')
+      # remove blank lines
+      if len(line) == 0:
+        continue
+      # match beginning of log entry
+      if line[0] == '{':
+        maybe_details = read_details(linestream)
+        log_entries.append(LogEntry(line, maybe_details))
+      # reached the log summary
+      # ignore it because we don't need it
+      # and it can be 100k+ more lines to go through
+      elif line[0]  == '=':
+        break
+      else:
+        log_entries.append(line)
+    if name_match is not None:
+      log_entries = filter_name(log_entries, name_match)
+    if result_match is not None:
+      log_entries = filter_result(log_entries, result_match)
+    if len(log_entries) == 0:
+      print_error("No matching log entries found\n")
+      sys.exit(1)
+    print_error('')
+    for entry in log_entries:
+      print(entry.raw_string)
+      if print_details:
+        print("\n".join(entry.details))
+  sys.exit(0)
+
+main()

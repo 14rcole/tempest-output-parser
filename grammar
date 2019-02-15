@@ -1,0 +1,63 @@
+# including a file describing the grammar of the log files.
+# these are just notes, not part of any sort of parser 
+# generator.  if future updates to tempest change the 
+# structure of the output, this script may become incompatible.
+
+# rough grammar for logs of the tempest stdout + stderr
+
+log := header entry summary
+
+header := _string
+
+summary := _string
+
+entry := id test time '...' result
+
+id := {_num}
+
+test := _string.rest
+
+rest := _string.rest | string
+
+result = ok | SKIPPED reason | FAILED traceback maybe-logging
+
+# These log files are in excess of 100MB, so for performance,
+# this script uses a simplified version of the grammar:
+
+log := header entry summary
+
+header := _string
+
+summary := _string
+
+entry := '^{' _string  '\n' details
+
+details := _string '\n' details | _string
+
+# parsing transition rules look like this
+
+[0] '[^{]' -> [0]
+[0] '{' -> [1]
+
+[1] '[^\n | ^=]' -> [1]
+[1] '[\n]' -> [2]
+[1] '=' -> [3]
+
+[2] '[^{ | ^=]' -> [2]
+[2] '{' -> [1]
+[2] '=' -> [3]
+
+[3] '*' -> [3]
+
+0) Parse through header
+1) parse entry
+2) parse details
+3) parse through the summary
+
+# tokenizing the entry string is defferred to the constructor,
+# and parsing is only done on request when class methods
+# are called. this sort of lazy evaluation removes some of the
+# parsing overead when it is not needed.  tokenization could also
+# be done this way, but no existing functionality would really
+# utilize it effectively.
+
